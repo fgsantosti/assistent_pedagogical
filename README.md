@@ -26,6 +26,27 @@ Como documento para o modelo extrair o conhecimento externo irei utilizar a orga
 ---
 
 ### **Passo 1: Configurando o Ambiente**
+
+---
+
+### 1. **Usar um Ambiente Virtual**
+Crie um ambiente virtual e instale os pacotes dentro dele para evitar interferências no sistema.
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install nome_do_pacote
+```
+
+Para sair do ambiente virtual, use:
+
+```bash
+deactivate
+```
+
+---
+
+
 Instale as bibliotecas necessárias:
 ```bash
 pip install langchain openai groq python-dotenv
