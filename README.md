@@ -1,4 +1,5 @@
-Abaixo, apresento um guia passo a passo para criar um chatbot com **RAG** (Retrieval-Augmented Generation) usando **LangChain**, **OpenAI**, e **Groq**. 
+## LangChain
+Abaixo é apresentado um guia passo a passo para criar um chatbot com **RAG** (Retrieval-Augmented Generation) usando **LangChain**, **OpenAI**, e **Groq**. 
 
 --- 
 
@@ -198,3 +199,151 @@ python rag_chatbot.py
 
 ---
 
+## LangServe
+
+Vamos integrar o aplicativo ao **LangServe**, que facilita a implantação de **runnables** e cadeias do LangChain como uma **API REST**. Isso permitirá que o chatbot seja acessado por meio de chamadas HTTP, expandindo seu uso para aplicações web ou móveis.
+
+---
+
+### **Passo 1: Instalar o LangServe**
+O LangServe é parte do ecossistema do LangChain. Instale-o com o comando:
+```bash
+pip install langserve
+```
+
+---
+
+### **Passo 2: Adaptar o Código para Usar LangServe**
+A integração com o LangServe exige criar um arquivo principal onde definimos a cadeia (`chain`) que será disponibilizada como uma API REST.
+
+Aqui está o código atualizado para integração com o LangServe:
+
+#### **Arquivo: `rag_api.py`**
+```python
+import os
+from dotenv import load_dotenv
+from langchain.document_loaders import TextLoader, PyPDFLoader
+from langchain.vectorstores import FAISS
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.chains import ConversationalRetrievalChain
+from langchain.chat_models import ChatOpenAI
+from langserve import launch_langserve
+from docx import Document
+
+# Carregar variáveis de ambiente
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Função para carregar documentos
+def load_documents():
+    print("Carregando documentos...")
+    documents = []
+    folder_path = "./documents"
+
+    for file_name in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, file_name)
+
+        # Carregar arquivos TXT
+        if file_name.endswith(".txt"):
+            loader = TextLoader(file_path)
+            documents.extend(loader.load())
+
+        # Carregar arquivos PDF
+        elif file_name.endswith(".pdf"):
+            loader = PyPDFLoader(file_path)
+            documents.extend(loader.load())
+
+        # Carregar arquivos DOCX
+        elif file_name.endswith(".docx"):
+            doc = Document(file_path)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            documents.append({"text": text, "metadata": {"source": file_name}})
+
+    print(f"Carregado {len(documents)} documentos.")
+    return documents
+
+# Configurar o índice vetorial
+def create_vector_store(documents):
+    print("Criando índice vetorial...")
+    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+    vector_store = FAISS.from_documents(documents, embeddings)
+    return vector_store
+
+# Configurar a cadeia RAG
+def create_rag_pipeline(vector_store):
+    print("Configurando pipeline RAG...")
+    retriever = vector_store.as_retriever()
+    model = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=OPENAI_API_KEY)
+    pipeline = ConversationalRetrievalChain.from_llm(
+        llm=model,
+        retriever=retriever,
+    )
+    return pipeline
+
+# Inicializar a API com LangServe
+if __name__ == "__main__":
+    # Carregar documentos e criar a cadeia RAG
+    documents = load_documents()
+    vector_store = create_vector_store(documents)
+    rag_pipeline = create_rag_pipeline(vector_store)
+
+    # Inicializar o LangServe com a cadeia configurada
+    print("Inicializando API REST...")
+    launch_langserve(rag_pipeline, port=8000)
+```
+
+---
+
+### **O que este código faz?**
+1. **Carregamento de Documentos**:
+   - Lê arquivos nos formatos `.txt`, `.pdf`, e `.docx`.
+2. **Criação do Índice Vetorial**:
+   - Utiliza `FAISS` para armazenar embeddings dos documentos.
+3. **Configuração do RAG**:
+   - Configura a cadeia RAG utilizando o modelo GPT-4 da OpenAI.
+4. **Lançamento da API REST**:
+   - Usa `LangServe` para expor a cadeia como uma API REST na porta 8000.
+
+---
+
+### **Passo 3: Executar a API**
+Para iniciar a API, execute o arquivo:
+```bash
+python rag_api.py
+```
+
+---
+
+### **Testando a API**
+Com a API em execução, você pode testar suas funcionalidades usando ferramentas como **Postman**, **cURL** ou até mesmo navegadores. Segue um exemplo de teste com `curl`:
+
+#### **Exemplo de Requisição com cURL**
+```bash
+curl -X POST "http://localhost:8000" \
+-H "Content-Type: application/json" \
+-d '{
+  "question": "Quais são os temas cobertos nos documentos?",
+  "chat_history": []
+}'
+```
+
+#### **Resposta Esperada**
+A API retornará uma resposta gerada pelo pipeline RAG, usando os documentos carregados como base de conhecimento.
+
+---
+
+### **Passo 4: Usar a API em uma Aplicação**
+Agora que o chatbot está disponível como uma API REST, você pode integrá-lo a:
+1. Aplicações Web (usando frameworks como **React** ou **Flask**).
+2. Aplicações Móveis (Android ou iOS).
+3. Interfaces de Linha de Comando que consomem a API.
+
+---
+
+### **Passo 5: Expansões Finais**
+1. **Autenticação**: Adicione autenticação para proteger sua API (ex: tokens de autenticação).
+2. **Deploy em Nuvem**:
+   - Use plataformas como **Heroku**, **AWS**, ou **Azure** para disponibilizar a API globalmente.
+3. **Monitoramento**: Adicione logs para monitorar o uso da API.
+
+Se precisar de ajuda com o deploy ou integração em um front-end, é só chamar!
