@@ -209,6 +209,9 @@ Vamos integrar o aplicativo ao **LangServe**, que facilita a implantação de **
 O LangServe é parte do ecossistema do LangChain. Instale-o com o comando:
 ```bash
 pip install langserve
+
+pip install fastapi uvicorn
+
 ```
 
 ---
