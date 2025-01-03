@@ -224,75 +224,102 @@ Aqui está o código atualizado para integração com o LangServe:
 #### **Arquivo: `rag_api.py`**
 ```python
 import os
-from dotenv import load_dotenv
-from langchain.document_loaders import TextLoader, PyPDFLoader
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from typing import List, Tuple
 from langchain.vectorstores import FAISS
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langserve import launch_langserve
-from docx import Document
+from langchain.prompts import PromptTemplate
+from langserve import add_routes
+from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Função para carregar documentos
+# Templates de prompt
+CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(
+    """Dada a seguinte história de conversação e uma pergunta de acompanhamento, reescreva a pergunta como uma pergunta independente no seu idioma original.
+
+Histórico de Conversa:
+{chat_history}
+Pergunta de Acompanhamento: {question}
+Pergunta Independente:"""
+)
+
+ANSWER_PROMPT = PromptTemplate.from_template(
+    """Responda à pergunta com base apenas no seguinte contexto:
+{context}
+
+Pergunta: {question}
+"""
+)
+
+# Classe para histórico de conversação
+class ChatHistory(BaseModel):
+    chat_history: List[Tuple[str, str]] = Field(
+        ...,
+        extra={"widget": {"type": "chat", "input": "question"}},
+    )
+    question: str
+
+# Função para configurar o modelo OpenAI
+def setup_openai_model():
+    return ChatOpenAI(
+        model="gpt-4",
+        temperature=0,  # Controle da criatividade
+        openai_api_key=OPENAI_API_KEY,
+    )
+
+# Função para carregar documentos de exemplo
 def load_documents():
+    """Carrega documentos de exemplo para criar um vetor FAISS."""
     print("Carregando documentos...")
-    documents = []
-    folder_path = "./documents"
+    return ["Exemplo de texto para demonstração do RAG."]
 
-    for file_name in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, file_name)
-
-        # Carregar arquivos TXT
-        if file_name.endswith(".txt"):
-            loader = TextLoader(file_path)
-            documents.extend(loader.load())
-
-        # Carregar arquivos PDF
-        elif file_name.endswith(".pdf"):
-            loader = PyPDFLoader(file_path)
-            documents.extend(loader.load())
-
-        # Carregar arquivos DOCX
-        elif file_name.endswith(".docx"):
-            doc = Document(file_path)
-            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            documents.append({"text": text, "metadata": {"source": file_name}})
-
-    print(f"Carregado {len(documents)} documentos.")
-    return documents
-
-# Configurar o índice vetorial
+# Função para criar vetor FAISS
 def create_vector_store(documents):
     print("Criando índice vetorial...")
     embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-    vector_store = FAISS.from_documents(documents, embeddings)
+    vector_store = FAISS.from_texts(documents, embeddings)
     return vector_store
 
-# Configurar a cadeia RAG
+# Função para configurar a pipeline de RAG
 def create_rag_pipeline(vector_store):
     print("Configurando pipeline RAG...")
     retriever = vector_store.as_retriever()
-    model = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=OPENAI_API_KEY)
+    model = setup_openai_model()
     pipeline = ConversationalRetrievalChain.from_llm(
         llm=model,
         retriever=retriever,
+        condense_question_prompt=CONDENSE_QUESTION_PROMPT,
+        qa_prompt=ANSWER_PROMPT,
     )
     return pipeline
 
-# Inicializar a API com LangServe
-if __name__ == "__main__":
-    # Carregar documentos e criar a cadeia RAG
-    documents = load_documents()
-    vector_store = create_vector_store(documents)
-    rag_pipeline = create_rag_pipeline(vector_store)
+# Configuração do servidor FastAPI
+app = FastAPI(
+    title="LangChain RAG Server",
+    version="1.0",
+    description="Servidor RAG baseado em LangChain com FastAPI.",
+)
 
-    # Inicializar o LangServe com a cadeia configurada
-    print("Inicializando API REST...")
-    launch_langserve(rag_pipeline, port=8000)
+# Inicialização do vetor FAISS e pipeline
+documents = load_documents()
+vector_store = create_vector_store(documents)
+rag_pipeline = create_rag_pipeline(vector_store)
+
+# Configura rotas usando LangServe
+add_routes(app, rag_pipeline.with_types(input_type=ChatHistory))
+
+# Iniciar o servidor
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
 ```
 
 ---
