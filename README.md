@@ -203,6 +203,11 @@ python rag_chatbot.py
 
 Vamos integrar o aplicativo ao **LangServe**, que facilita a implantação de **runnables** e cadeias do LangChain como uma **API REST**. Isso permitirá que o chatbot seja acessado por meio de chamadas HTTP, expandindo seu uso para aplicações web ou móveis.
 
+
+[Langserve Documentação](https://python.langchain.com/docs/langserve/)
+[Conversational Retriever](https://github.com/langchain-ai/langserve/blob/main/examples/conversational_retrieval_chain/server.py)
+
+
 ---
 
 ### **Passo 1: Instalar o LangServe**
@@ -322,6 +327,31 @@ if __name__ == "__main__":
 
 ```
 
+O código acima implementa um servidor FastAPI para um chatbot baseado em Recuperação e Geração de Respostas (RAG) utilizando a biblioteca LangChain. Aqui está o entendimento geral:
+
+### **Visão Geral**
+1. **Carregamento de Variáveis de Ambiente**:
+   - Utiliza o `dotenv` para carregar a chave da API da OpenAI (`OPENAI_API_KEY`) do arquivo `.env`.
+
+2. **Carregamento de Documentos**:
+   - Lê arquivos `.txt`, `.pdf` e `.docx` da pasta `./documents`, processando-os para serem utilizados na criação do índice vetorial.
+
+3. **Criação de Índice Vetorial**:
+   - Utiliza o FAISS para criar um índice vetorial dos documentos processados, permitindo a busca eficiente de informações baseadas em embeddings gerados pelo OpenAI.
+
+4. **Pipeline de Recuperação e Resposta**:
+   - Implementa prompts personalizados para:
+     - Reformular perguntas de acompanhamento para perguntas independentes.
+     - Responder perguntas com base apenas no contexto recuperado dos documentos.
+   - Usa `RunnableMap` e outros utilitários do LangChain para compor essa pipeline.
+
+5. **Interface do Usuário (API)**:
+   - Cria um aplicativo FastAPI que expõe endpoints como `/invoke`, `/batch`, e `/stream` para interação com o chatbot.
+
+6. **Execução do Servidor**:
+   - Utiliza `uvicorn` para executar o servidor localmente na porta `8000`.
+
+
 ---
 
 ### **O que este código faz?**
@@ -347,15 +377,47 @@ python rag_api.py
 ### **Testando a API**
 Com a API em execução, você pode testar suas funcionalidades usando ferramentas como **Postman**, **cURL** ou até mesmo navegadores. Segue um exemplo de teste com `curl`:
 
-#### **Exemplo de Requisição com cURL**
+#### **Exemplo de Requisição com Python usando `requests`**
 ```bash
-curl -X POST "http://localhost:8000" \
--H "Content-Type: application/json" \
--d '{
-  "question": "Quais são os temas cobertos nos documentos?",
-  "chat_history": []
-}'
+import requests
+
+inputs = {"input": {"question": "Qual o objetivo da organização didática?", "chat_history": []}}
+response = requests.post("http://localhost:8000/invoke", json=inputs)
+
+response.json()
 ```
+
+output
+```bash
+{'output': 'O objetivo da organização didática é reger as atividades e decisões didático-pedagógicas desenvolvidas no Instituto Federal de Educação, Ciência e Tecnologia do Piauí, observando as disposições legais que regulamentam a educação no Brasil.',
+ 'metadata': {'run_id': '8c0d339c-0481-4aa5-aa6b-514f37d02131',
+  'feedback_tokens': []}}
+```
+
+
+```bash
+import requests
+
+inputs = {"input": {"question": "O que deve constar em um plano de disciplina?", "chat_history": []}}
+response = requests.post("http://localhost:8000/invoke", json=inputs)
+
+print(response.json()['output'])
+```
+output
+
+```bash
+De acordo com o texto fornecido, um plano de disciplina deve incluir os seguintes elementos:
+I - identificação;
+II - ementa;
+III - objetivos: geral e específicos;
+IV - conteúdo programático;
+V - metodologia;
+VI - recursos;
+VII - avaliação; e
+VIII - referências (básica e complementar).
+
+```
+
 
 #### **Resposta Esperada**
 A API retornará uma resposta gerada pelo pipeline RAG, usando os documentos carregados como base de conhecimento.
