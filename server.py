@@ -126,6 +126,7 @@ vectorstore = create_vector_store(documents)
     ["harrison worked at kensho"], embedding=OpenAIEmbeddings()
 )'''
 
+# Configurar o pipeline de RAG
 retriever = vectorstore.as_retriever()
 
 _inputs = RunnableMap(
