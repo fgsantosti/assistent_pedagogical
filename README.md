@@ -204,8 +204,9 @@ python rag_chatbot.py
 Vamos integrar o aplicativo ao **LangServe**, que facilita a implantação de **runnables** e cadeias do LangChain como uma **API REST**. Isso permitirá que o chatbot seja acessado por meio de chamadas HTTP, expandindo seu uso para aplicações web ou móveis.
 
 
-[Langserve Documentação](https://python.langchain.com/docs/langserve/)
-[Conversational Retriever](https://github.com/langchain-ai/langserve/blob/main/examples/conversational_retrieval_chain/server.py)
+- [Langserve Documentação](https://python.langchain.com/docs/langserve/)
+
+- [Conversational Retriever](https://github.com/langchain-ai/langserve/blob/main/examples/conversational_retrieval_chain/server.py)
 
 
 ---
@@ -228,103 +229,181 @@ Aqui está o código atualizado para integração com o LangServe:
 
 #### **Arquivo: `rag_api.py`**
 ```python
+#!/usr/bin/env python
+"""Example LangChain server exposes a conversational retrieval chain.
+
+Follow the reference here:
+
+https://python.langchain.com/docs/expression_language/cookbook/retrieval#conversational-retrieval-chain
+
+To run this example, you will need to install the following packages:
+pip install langchain openai faiss-cpu tiktoken
+"""  # noqa: F401
 import os
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+from operator import itemgetter
 from typing import List, Tuple
-from langchain.vectorstores import FAISS
+
+from fastapi import FastAPI
+from langchain_community.vectorstores import FAISS
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate, format_document
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain.prompts import PromptTemplate
+from pydantic import BaseModel, Field
+
 from langserve import add_routes
-from dotenv import load_dotenv
+
+from langchain.document_loaders import TextLoader
+from langchain.document_loaders import PyPDFLoader
+from docx import Document
 
 # Carregar variáveis de ambiente
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Templates de prompt
-CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(
-    """Dada a seguinte história de conversação e uma pergunta de acompanhamento, reescreva a pergunta como uma pergunta independente no seu idioma original.
+# Configurando o modelo OpenAI
+def setup_openai_model():
+    return ChatOpenAI(
+        model="gpt-4",
+        temperature=0,  # Controle da criatividade das respostas
+        openai_api_key=OPENAI_API_KEY,
+    )
+
+_TEMPLATE = """Dada a seguinte história de conversação e uma pergunta de acompanhamento, reescreva a pergunta como uma pergunta independente no seu idioma original.
 
 Histórico de Conversa:
 {chat_history}
 Pergunta de Acompanhamento: {question}
 Pergunta Independente:"""
-)
 
-ANSWER_PROMPT = PromptTemplate.from_template(
-    """Responda à pergunta com base apenas no seguinte contexto:
+CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(_TEMPLATE)
+
+ANSWER_TEMPLATE =     """Responda à pergunta com base apenas no seguinte contexto:
 {context}
-
 Pergunta: {question}
 """
-)
 
-# Classe para histórico de conversação
+ANSWER_PROMPT = ChatPromptTemplate.from_template(ANSWER_TEMPLATE)
+
+DEFAULT_DOCUMENT_PROMPT = PromptTemplate.from_template(template="{page_content}")
+
+
+def _combine_documents(
+    docs, document_prompt=DEFAULT_DOCUMENT_PROMPT, document_separator="\n\n"
+):
+    """Combine documents into a single string."""
+    doc_strings = [format_document(doc, document_prompt) for doc in docs]
+    return document_separator.join(doc_strings)
+
+
+def _format_chat_history(chat_history: List[Tuple]) -> str:
+    """Format chat history into a string."""
+    buffer = ""
+    for dialogue_turn in chat_history:
+        human = "Human: " + dialogue_turn[0]
+        ai = "Assistant: " + dialogue_turn[1]
+        buffer += "\n" + "\n".join([human, ai])
+    return buffer
+
+
+
+# Carregar os documentos
+def load_documents():
+    print("Carregando documentos...")
+    documents = []
+
+    # Caminho da pasta onde os documentos estão
+    folder_path = "./documents"
+
+    # Iterar por todos os arquivos na pasta
+    for file_name in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, file_name)
+
+        # Carregar arquivos TXT
+        if file_name.endswith(".txt"):
+            loader = TextLoader(file_path)
+            documents.extend(loader.load())
+
+        # Carregar arquivos PDF
+        elif file_name.endswith(".pdf"):
+            loader = PyPDFLoader(file_path)
+            documents.extend(loader.load())
+
+        # Carregar arquivos DOCX
+        elif file_name.endswith(".docx"):
+            doc = Document(file_path)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            documents.append({"text": text, "metadata": {"source": file_name}})
+
+    print(f"Carregado {len(documents)} documentos.")
+    return documents
+
+# Criar o índice de vetores para RAG
+def create_vector_store(documents):
+    print("Criando índice vetorial...")
+    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
+    vector_store = FAISS.from_documents(documents, embeddings)
+    return vector_store
+
+# Carregar os documentos
+documents = load_documents()
+vectorstore = create_vector_store(documents)
+
+'''vectorstore = FAISS.from_texts(
+    ["harrison worked at kensho"], embedding=OpenAIEmbeddings()
+)'''
+
+retriever = vectorstore.as_retriever()
+
+_inputs = RunnableMap(
+    standalone_question=RunnablePassthrough.assign(
+        chat_history=lambda x: _format_chat_history(x["chat_history"])
+    )
+    | CONDENSE_QUESTION_PROMPT
+    | ChatOpenAI(temperature=0)
+    | StrOutputParser(),
+)
+_context = {
+    "context": itemgetter("standalone_question") | retriever | _combine_documents,
+    "question": lambda x: x["standalone_question"],
+}
+
+
+# User input
 class ChatHistory(BaseModel):
+    """Chat history with the bot."""
+
     chat_history: List[Tuple[str, str]] = Field(
         ...,
         extra={"widget": {"type": "chat", "input": "question"}},
     )
     question: str
 
-# Função para configurar o modelo OpenAI
-def setup_openai_model():
-    return ChatOpenAI(
-        model="gpt-4",
-        temperature=0,  # Controle da criatividade
-        openai_api_key=OPENAI_API_KEY,
-    )
 
-# Função para carregar documentos de exemplo
-def load_documents():
-    """Carrega documentos de exemplo para criar um vetor FAISS."""
-    print("Carregando documentos...")
-    return ["Exemplo de texto para demonstração do RAG."]
-
-# Função para criar vetor FAISS
-def create_vector_store(documents):
-    print("Criando índice vetorial...")
-    embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-    vector_store = FAISS.from_texts(documents, embeddings)
-    return vector_store
-
-# Função para configurar a pipeline de RAG
-def create_rag_pipeline(vector_store):
-    print("Configurando pipeline RAG...")
-    retriever = vector_store.as_retriever()
-    model = setup_openai_model()
-    pipeline = ConversationalRetrievalChain.from_llm(
-        llm=model,
-        retriever=retriever,
-        condense_question_prompt=CONDENSE_QUESTION_PROMPT,
-        qa_prompt=ANSWER_PROMPT,
-    )
-    return pipeline
-
-# Configuração do servidor FastAPI
-app = FastAPI(
-    title="LangChain RAG Server",
-    version="1.0",
-    description="Servidor RAG baseado em LangChain com FastAPI.",
+conversational_qa_chain = (
+    _inputs | _context | ANSWER_PROMPT | ChatOpenAI() | StrOutputParser()
 )
+chain = conversational_qa_chain.with_types(input_type=ChatHistory)
 
-# Inicialização do vetor FAISS e pipeline
-documents = load_documents()
-vector_store = create_vector_store(documents)
-rag_pipeline = create_rag_pipeline(vector_store)
+app = FastAPI(
+    title="LangChain Server",
+    version="1.0",
+    description="Spin up a simple api server using Langchain's Runnable interfaces",
+)
+# Adds routes to the app for using the chain under:
+# /invoke
+# /batch
+# /stream
+add_routes(app, chain, enable_feedback_endpoint=True)
 
-# Configura rotas usando LangServe
-add_routes(app, rag_pipeline.with_types(input_type=ChatHistory))
-
-# Iniciar o servidor
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
+    uvicorn.run(app, host="localhost", port=8000)
 ```
 
 O código acima implementa um servidor FastAPI para um chatbot baseado em Recuperação e Geração de Respostas (RAG) utilizando a biblioteca LangChain. Aqui está o entendimento geral:
@@ -375,7 +454,7 @@ python rag_api.py
 ---
 
 ### **Testando a API**
-Com a API em execução, você pode testar suas funcionalidades usando ferramentas como **Postman**, **cURL** ou até mesmo navegadores. Segue um exemplo de teste com `curl`:
+Com a API em execução, você pode testar suas funcionalidades usando ferramentas como **Postman**, **cURL** ou até mesmo navegadores. Segue um exemplo de testes:
 
 #### **Exemplo de Requisição com Python usando `requests`**
 ```bash
